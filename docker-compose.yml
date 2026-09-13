@@ -48,6 +48,11 @@ x-common: &common
     # at the internal sidecar; the capability token is shared via the mounted file.
     - OMNIROUTE_CODEX_APPSERVER_WS=${OMNIROUTE_CODEX_APPSERVER_WS:-ws://codex-app-server:1456}
     - OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE=${OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE:-/run/codex-appserver/token}
+    # Ngrok tunnel. The token alone only makes the tunnel "ready to start" (it
+    # still had to be started by hand from the dashboard); the auto-start flag is
+    # a deliberate SECOND opt-in because it publishes the proxy on a public URL.
+    - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
+    - OMNIROUTE_NGROK_AUTOSTART=${OMNIROUTE_NGROK_AUTOSTART:-}
   volumes:
     - ./data:/app/data
     # Shared capability token + codex auth for the app-server WS. Only meaningful

@@ -227,6 +227,15 @@ ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_MEMORY_MB}"
 ENV DATA_DIR=/app/data
 RUN mkdir -p /app/data
 
+# Ngrok tunnel (src/lib/ngrokAutoStart.ts). Declared empty so both vars are part
+# of the image's documented runtime contract and can be supplied with plain
+# `docker run -e`. The auto-start is a DOUBLE opt-in: the authtoken alone only
+# leaves the tunnel "ready to start" (it still has to be started from the
+# dashboard) — the second flag is required because it publishes this instance on
+# a public ngrok URL. Never bake a real token into an image you distribute.
+ENV NGROK_AUTHTOKEN=""
+ENV OMNIROUTE_NGROK_AUTOSTART=""
+
 # `npm run build` (build-next-isolated → assembleStandalone) bundles ALL runtime
 # files into .build/next/standalone/ — .next, node_modules, migrations, scripts,
 # docs, and the previously hand-COPY'd modules below (@swc/helpers, pino-*, split2,
