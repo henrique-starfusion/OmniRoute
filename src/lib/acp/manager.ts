@@ -116,7 +116,7 @@ export class AcpManager extends EventEmitter {
       this.emit("stderr", { sessionId, data: chunk.toString() });
     });
 
-    child.on("exit", (code, signal) => {
+    child.on("close", (code, signal) => {
       session.alive = false;
       // Only kill() used to remove entries, so any agent that exited on its own
       // stayed in the map forever. getActiveSessions() filters on `alive`, which
@@ -153,50 +153,84 @@ export class AcpManager extends EventEmitter {
     const session = this.sessions.get(sessionId);
     if (!session?.alive) throw new Error(`Session ${sessionId} is not alive`);
 
-    // Clear buffers before sending. stderr is reset too: it was previously only
-    // ever appended to, so diagnostics for one prompt carried stale output from
-    // every earlier prompt in the session.
     session.stdoutBuffer = "";
     session.stderrBuffer = "";
 
-    // Send prompt
-    this.sendInput(sessionId, prompt + "\n");
-
-    // Wait for response (collect until process goes idle or timeout)
     return new Promise((resolve, reject) => {
-      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const stdin = session.process.stdin;
+      if (!stdin?.writable) {
+        reject(new Error(`Session ${session.id} is not accepting input`));
+        return;
+      }
 
-      // Every outcome -- idle, exit, or timeout -- has to release the same
-      // resources. `acpManager` is a module-level singleton, so a branch that
-      // skips this leaks a listener per call for the lifetime of the process.
-      const settle = (finish: () => void) => {
-        clearTimeout(timer);
+      let settled = false;
+      let writeComplete = false;
+      let receivedOutput = false;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      let writeError: Error | undefined;
+
+      const cleanup = () => {
+        clearTimeout(timeoutTimer);
         clearTimeout(idleTimer);
         this.removeListener("stdout", onData);
         this.removeListener("exit", onExit);
+        stdin.removeListener("error", onWriteError);
+        if (!writeComplete) stdin.destroy();
+      };
+      const settle = (finish: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         finish();
       };
-
-      const timer = setTimeout(() => {
-        settle(() => reject(new Error(`ACP timeout after ${timeoutMs}ms`)));
-      }, timeoutMs);
-
-      const onData = ({ sessionId: sid }: { sessionId: string }) => {
-        if (sid !== sessionId) return;
-        // Reset idle timer on new data
+      const armIdleTimer = () => {
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
           settle(() => resolve(session.stdoutBuffer));
-        }, 2000); // 2s idle = response complete
+        }, 2000);
       };
-
+      const onData = ({ sessionId: sid }: { sessionId: string }) => {
+        if (sid !== sessionId) return;
+        receivedOutput = true;
+        if (writeComplete) armIdleTimer();
+      };
       const onExit = ({ sessionId: sid }: { sessionId: string }) => {
         if (sid !== sessionId) return;
+        if (writeError && !session.stdoutBuffer) {
+          settle(() => reject(writeError));
+          return;
+        }
         settle(() => resolve(session.stdoutBuffer));
       };
+      const rejectWrite = (error: Error) => {
+        if (settled || writeError) return;
+        writeError = error;
+        if (session.process.exitCode === null) this.kill(sessionId);
+      };
+      const onWriteError = (error: Error) => rejectWrite(error);
+      const timeoutTimer = setTimeout(() => {
+        if (!writeComplete) this.kill(sessionId);
+        settle(() => reject(new Error(`ACP timeout after ${timeoutMs}ms`)));
+      }, timeoutMs);
 
       this.on("stdout", onData);
       this.on("exit", onExit);
+      stdin.on("error", onWriteError);
+
+      try {
+        stdin.write(prompt + "\n", (error?: Error | null) => {
+          if (settled) return;
+          if (error) {
+            rejectWrite(error);
+            return;
+          }
+          writeComplete = true;
+          stdin.removeListener("error", onWriteError);
+          if (receivedOutput) armIdleTimer();
+        });
+      } catch (error) {
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      }
     });
   }
 

@@ -141,3 +141,115 @@ test("stderr is reset between prompts so diagnostics are per-prompt (#13095)", a
     mgr.kill(session.id);
   }
 });
+
+// #long-context: a prompt larger than the writable highWaterMark must be fully flushed
+// before sendPrompt starts its response idle window. Slow readers otherwise receive only
+// a prefix while the caller resolves as if the whole payload had been delivered.
+test("sendPrompt honors stdin backpressure for long prompts", async () => {
+  setCustomAgents([
+    {
+      id: AGENT_ID,
+      name: "Slow stdin probe",
+      binary: process.execPath,
+      acpSpawnable: true,
+    },
+  ]);
+  const script = `
+    let received = 0;
+    process.stdin.on("data", (chunk) => {
+      process.stdin.pause();
+      received += chunk.length;
+      setTimeout(() => {
+        process.stdout.write(String(received) + "\\n");
+        process.stdin.resume();
+      }, 5);
+    });
+    setInterval(() => {}, 1000);
+  `;
+  const mgr = new AcpManager();
+  const session = mgr.spawn(AGENT_ID, process.execPath, ["-e", script]);
+  const prompt = "x".repeat(2 * 1024 * 1024);
+  try {
+    const output = await mgr.sendPrompt(session.id, prompt, 15_000);
+    const counts = [...output.matchAll(/\d+/g)].map((match) => Number(match[0]));
+    assert.equal(Math.max(...counts), Buffer.byteLength(prompt + "\n"));
+  } finally {
+    mgr.kill(session.id);
+  }
+});
+
+test("sendPrompt remembers stdout emitted while stdin is still writing", async () => {
+  setCustomAgents([
+    {
+      id: AGENT_ID,
+      name: "Early stdout probe",
+      binary: process.execPath,
+      acpSpawnable: true,
+    },
+  ]);
+  const script = `
+    process.stdout.write("EARLY-OUTPUT\\n");
+    process.stdin.pause();
+    setTimeout(() => {
+      process.stdin.on("data", () => {});
+      process.stdin.resume();
+    }, 200);
+    setInterval(() => {}, 1000);
+  `;
+  const mgr = new AcpManager();
+  const session = mgr.spawn(AGENT_ID, process.execPath, ["-e", script]);
+  try {
+    const output = await mgr.sendPrompt(session.id, "x".repeat(2 * 1024 * 1024), 4000);
+    assert.match(output, /EARLY-OUTPUT/);
+  } finally {
+    mgr.kill(session.id);
+  }
+});
+
+test("sendPrompt resolves buffered stdout when the agent exits during write", async () => {
+  setCustomAgents([
+    {
+      id: AGENT_ID,
+      name: "Early exit probe",
+      binary: process.execPath,
+      acpSpawnable: true,
+    },
+  ]);
+  const script = `
+    process.stdin.pause();
+    process.stdout.write("x".repeat(256 * 1024));
+    process.stdout.write("BEFORE-EXIT\\n");
+    process.exit(0);
+  `;
+  const mgr = new AcpManager();
+  const session = mgr.spawn(AGENT_ID, process.execPath, ["-e", script]);
+
+  const output = await mgr.sendPrompt(session.id, "x".repeat(2 * 1024 * 1024), 3000);
+  assert.ok(output.endsWith("BEFORE-EXIT\n"), "stdout must drain before sendPrompt resolves");
+  assert.equal(mgr.listenerCount("stdout"), 0);
+  assert.equal(mgr.listenerCount("exit"), 0);
+});
+
+test("sendPrompt timeout includes a blocked stdin write", async () => {
+  setCustomAgents([
+    {
+      id: AGENT_ID,
+      name: "Blocked stdin probe",
+      binary: process.execPath,
+      acpSpawnable: true,
+    },
+  ]);
+  const mgr = new AcpManager();
+  const session = mgr.spawn(AGENT_ID, process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => mgr.sendPrompt(session.id, "x".repeat(2 * 1024 * 1024), 100),
+    /ACP timeout after 100ms/
+  );
+  assert.ok(Date.now() - startedAt < 1500, "timeout must not wait for stdin.write callback");
+  assert.equal(mgr.listenerCount("stdout"), 0);
+  assert.equal(mgr.listenerCount("exit"), 0);
+  assert.equal(session.process.stdin?.listenerCount("error"), 0);
+  assert.equal(mgr.getSession(session.id), undefined, "timed-out session must be removed");
+  assert.ok(session.process.killed, "timed-out session must be terminated");
+});
