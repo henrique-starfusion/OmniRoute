@@ -1,8 +1,8 @@
 import { normalizeComboModels, type ComboStep } from "./steps";
+import { resolveProviderId } from "@/shared/constants/providers";
 import { resolveComboTargetModelStr } from "../../../open-sse/services/combo/opencodeTargetAlias.ts";
-// Pure module on purpose: this file is imported by a client component, and model.ts
-// drags DB/playwright/sharp into the browser bundle (Turbopack build failure).
-import { resolveProviderAlias } from "../../../open-sse/services/providerAlias.ts";
+// Client-safe imports only: this file is imported by a "use client" component. model.ts
+// (DB/playwright/sharp) and the open-sse provider registry (node:fs) break the Turbopack build.
 
 type JsonRecord = Record<string, unknown>;
 
@@ -120,7 +120,7 @@ function providerFromModel(model: string | null | undefined): string | null {
   const slashIndex = normalized.indexOf("/");
   if (slashIndex <= 0) return null;
   const prefix = normalized.slice(0, slashIndex);
-  return resolveProviderAlias(prefix) || prefix;
+  return resolveProviderId(prefix) || prefix;
 }
 
 function normalizeSuccessRate(value: unknown): number {

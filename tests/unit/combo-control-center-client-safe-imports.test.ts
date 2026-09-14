@@ -12,6 +12,8 @@ import { resolveProviderAlias as modelResolve } from "../../open-sse/services/mo
 test("controlCenter.ts does not import server-only model.ts", () => {
   const src = readFileSync(join(process.cwd(), "src/lib/combos/controlCenter.ts"), "utf8");
   assert.doesNotMatch(src, /from\s+["'][^"']*services\/model(\.ts)?["']/);
+  // The open-sse provider registry pulls node:fs into the browser chunk too.
+  assert.doesNotMatch(src, /from\s+["'][^"']*(providerAlias|providerModels|providerRegistry)/);
 });
 
 test("providerAlias.ts has no runtime/DB imports", () => {
