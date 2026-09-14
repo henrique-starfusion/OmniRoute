@@ -14,8 +14,7 @@ import type { EmbeddingResult, EmbeddingError } from "./types";
 
 const MODEL_ID = "minishlab/potion-base-8M";
 const MODEL_NAME = "potion-base-8M";
-const HF_BASE =
-  process.env.HF_HUB_ENDPOINT || "https://huggingface.co";
+const HF_BASE = process.env.HF_HUB_ENDPOINT || "https://huggingface.co";
 
 function getModelDir(): string {
   const staticCacheDir = process.env.MEMORY_STATIC_CACHE_DIR;
@@ -25,8 +24,8 @@ function getModelDir(): string {
 }
 
 export interface PotionModel {
-  vocab: Record<string, number>;       // token → index
-  matrix: Float32Array;                // flat row-major [vocab_size × dim]
+  vocab: Record<string, number>; // token → index
+  matrix: Float32Array; // flat row-major [vocab_size × dim]
   dim: number;
   vocabSize: number;
   unkIdx: number;
@@ -95,25 +94,58 @@ function parseSafetensors(buf: Buffer): { matrix: Float32Array; shape: number[] 
   throw new Error("No float32 tensor found in safetensors file");
 }
 
+export async function loadVocab(
+  modelDir: string,
+  tokenizerPath: string
+): Promise<Record<string, number>> {
+  try {
+    const tokenizerRaw = await fs.readFile(tokenizerPath, "utf8");
+    const tokenizer = JSON.parse(tokenizerRaw) as { model?: { vocab?: Record<string, number> } };
+    const vocab = tokenizer.model?.vocab;
+    if (vocab && Object.keys(vocab).length > 0) return vocab;
+  } catch {
+    // fall through to vocab.json
+  }
+
+  const vocabJsonPath = path.join(modelDir, "vocab.json");
+  try {
+    const vocabRaw = await fs.readFile(vocabJsonPath, "utf8");
+    const vocab = JSON.parse(vocabRaw) as Record<string, number>;
+    if (Object.keys(vocab).length > 0) return vocab;
+  } catch {
+    // fall through to vocab.txt
+  }
+
+  const vocabTxtPath = path.join(modelDir, "vocab.txt");
+  const txtRaw = await fs.readFile(vocabTxtPath, "utf8");
+  const vocab: Record<string, number> = {};
+  for (const [idx, token] of txtRaw.split(/\r?\n/).entries()) {
+    const t = token.trim();
+    if (t) vocab[t] = idx;
+  }
+  if (Object.keys(vocab).length === 0) {
+    throw new Error(
+      "Failed to load vocab: no token→id map in tokenizer.json, vocab.json, or vocab.txt"
+    );
+  }
+  return vocab;
+}
+
 async function loadModel(): Promise<PotionModel> {
   const modelDir = getModelDir();
   await fs.mkdir(modelDir, { recursive: true });
 
   const hfBase = `${HF_BASE}/${MODEL_ID}/resolve/main`;
 
-  const vocabPath = path.join(modelDir, "vocab.json");
   const modelPath = path.join(modelDir, "model.safetensors");
   const tokenizerPath = path.join(modelDir, "tokenizer.json");
 
   await Promise.all([
-    ensureFile(vocabPath, `${hfBase}/vocab.json`),
     ensureFile(modelPath, `${hfBase}/model.safetensors`),
     ensureFile(tokenizerPath, `${hfBase}/tokenizer.json`),
   ]);
 
-  // Load vocab
-  const vocabRaw = await fs.readFile(vocabPath, "utf8");
-  const vocab = JSON.parse(vocabRaw) as Record<string, number>;
+  const vocab = await loadVocab(modelDir, tokenizerPath);
 
   // Load matrix from safetensors
   const modelBuf = await fs.readFile(modelPath);
@@ -168,7 +200,8 @@ export function tokenizeWordPiece(text: string, vocab: Record<string, number>): 
     while (remaining.length > 0) {
       let found = false;
       for (let end = remaining.length; end > 0; end--) {
-        const candidate = subTokens.length === 0 ? remaining.slice(0, end) : `##${remaining.slice(0, end)}`;
+        const candidate =
+          subTokens.length === 0 ? remaining.slice(0, end) : `##${remaining.slice(0, end)}`;
         if (vocab[candidate] !== undefined) {
           subTokens.push(vocab[candidate]);
           remaining = remaining.slice(end);
@@ -195,7 +228,13 @@ export function tokenizeWordPiece(text: string, vocab: Record<string, number>): 
 /**
  * Mean pooling over token vectors.
  */
-export function meanPool(tokenIds: number[], matrix: Float32Array, dim: number, vocabSize: number, unkIdx: number): Float32Array {
+export function meanPool(
+  tokenIds: number[],
+  matrix: Float32Array,
+  dim: number,
+  vocabSize: number,
+  unkIdx: number
+): Float32Array {
   const result = new Float32Array(dim);
   let validCount = 0;
 

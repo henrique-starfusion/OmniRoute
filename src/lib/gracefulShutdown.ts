@@ -28,6 +28,8 @@ declare global {
     | undefined;
   var __omnirouteRequestShutdown: ((signal: string) => Promise<void>) | undefined;
   var __omnirouteCustomServerOwnsShutdown: boolean | undefined;
+  var __omnirouteStopMemoryReindexJob: (() => Promise<void>) | undefined;
+  var __omnirouteStopObsidianSyncServer: (() => Promise<boolean>) | undefined;
 }
 
 function getShutdownState() {
@@ -120,6 +122,15 @@ async function cleanup(): Promise<void> {
       import("@/shared/utils/loggerResource"),
       import("@/lib/usage/callLogs"),
     ]);
+    await globalThis.__omnirouteStopMemoryReindexJob?.();
+    try {
+      if (await globalThis.__omnirouteStopObsidianSyncServer?.()) {
+        console.log("[Shutdown] Obsidian sync server stopped.");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[Shutdown] Obsidian sync server cleanup failed:", msg);
+    }
     const flushResult = await flushSpendBatchWriter();
     if (flushResult.flushedEntries > 0) {
       console.log(
