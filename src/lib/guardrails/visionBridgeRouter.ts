@@ -5,6 +5,7 @@
 
 import { getResolvedModelCapabilities } from "@/lib/modelCapabilities";
 import { getActiveSyncedCatalog } from "@/lib/db/models/activeSyncedCatalog";
+import { getModelIsHidden } from "@/lib/db/models";
 import { PROVIDER_MODELS } from "@omniroute/open-sse/config/providerModels";
 import { getRegisteredProviderEffortBaseModelId } from "@omniroute/open-sse/utils/registeredEffortVariants.ts";
 import {
@@ -123,6 +124,25 @@ export interface VisionBridgeRouterDeps {
    * `hasUsableCredentials`: `node:test` has no supported ESM module-mocking.
    */
   isModelLocked?: (provider: string, connectionId: string, model: string) => boolean;
+  /**
+   * User-hidden check (eye icon, modelCompatOverrides/customModels isHidden),
+   * defaulting to the real DB-backed `getModelIsHidden` for the chat modality.
+   * Hidden models must never be auto-picked as the vision reroute target.
+   */
+  isModelHidden?: (provider: string, model: string) => boolean;
+}
+
+function isHiddenForVisionRouting(
+  providerAlias: string,
+  modelId: string,
+  deps: VisionBridgeRouterDeps
+): boolean {
+  if (deps.isModelHidden) return deps.isModelHidden(providerAlias, modelId);
+  try {
+    return getModelIsHidden(resolveProviderId(providerAlias), modelId, "chat");
+  } catch {
+    return false; // DB unavailable — fail open like the credential check
+  }
 }
 
 export interface VisionModelCatalog {
@@ -223,6 +243,7 @@ async function cachedModelRemainsAvailable(
   const registryModel = PROVIDER_MODELS[providerAlias]?.find((model) => model.id === modelId);
   if (!registryModel) return false;
 
+  if (isHiddenForVisionRouting(providerAlias, modelId, deps)) return false;
   if (!(await isModelUsableGivenLockouts(providerAlias, modelId, deps))) return false;
 
   const catalog = await readActiveCatalog(providerAlias, deps);
@@ -251,7 +272,8 @@ async function getVisionCapableModels(
         const fullModelId = `${providerAlias}/${model.id}`;
         return (
           getResolvedModelCapabilities(fullModelId).supportsVision === true &&
-          !isVisionBridgeForcedModel(fullModelId)
+          !isVisionBridgeForcedModel(fullModelId) &&
+          !isHiddenForVisionRouting(providerAlias, model.id, deps)
         );
       });
       if (visionModels.length === 0) return [];

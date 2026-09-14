@@ -228,6 +228,52 @@ test("getBestVisionModel — accepts a registry model whose liveCatalogIds match
   }
 });
 
+// ── user-hidden exclusion ───────────────────────────────────────────────────
+// Live incident (odin): image-bearing auto/smart requests were rerouted to the
+// user-hidden cc/claude-fable-5-1, which 429'd/400'd and left the client silent.
+
+test("getBestVisionModel — never auto-selects a user-hidden vision model", async () => {
+  const provider = "__vision-bridge-hidden-test-1__";
+  PROVIDER_MODELS[provider] = [
+    { id: "hidden-vision", name: "Hidden Vision", supportsVision: true },
+    { id: "visible-vision", name: "Visible Vision", supportsVision: true },
+  ];
+
+  try {
+    const model = await getBestVisionModel(
+      {},
+      {
+        hasUsableCredentials: async (id) => id.startsWith(`${provider}/`),
+        isModelHidden: (p, m) => p === provider && m === "hidden-vision",
+      }
+    );
+    assert.equal(model, `${provider}/visible-vision`);
+  } finally {
+    delete PROVIDER_MODELS[provider];
+    clearSelectionCache();
+  }
+});
+
+test("getBestVisionModel — drops a cached selection once the model is hidden mid-window", async () => {
+  const provider = "__vision-bridge-hidden-test-2__";
+  const modelId = "only-vision";
+  PROVIDER_MODELS[provider] = [{ id: modelId, name: "Only Vision", supportsVision: true }];
+  let hidden = false;
+  const deps = {
+    hasUsableCredentials: async (id: string) => id.startsWith(`${provider}/`),
+    isModelHidden: (p: string, m: string) => hidden && p === provider && m === modelId,
+  };
+
+  try {
+    assert.equal(await getBestVisionModel({}, deps), `${provider}/${modelId}`);
+    hidden = true;
+    assert.equal(await getBestVisionModel({}, deps), null);
+  } finally {
+    delete PROVIDER_MODELS[provider];
+    clearSelectionCache();
+  }
+});
+
 // ── getFallbackModels ───────────────────────────────────────────────────────
 
 test("getFallbackModels — should return fallback models excluding the primary", async () => {
