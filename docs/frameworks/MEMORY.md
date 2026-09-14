@@ -151,6 +151,13 @@ amortizes the backfill cost across real requests without blocking startup.
 
 **Explicit reindex**: The Engine tab in `/dashboard/memory` provides a
 "Reindex Now" button that calls `POST /api/memory/reindex`. The handler calls
+The endpoint delegates to the same process-wide worker used by automatic reindexing. Set
+`MEMORY_AUTO_REINDEX_ENABLED=true` to opt in to an immediate startup drain; the default is
+`false`. `MEMORY_AUTO_REINDEX_BATCH_SIZE` defaults to `50`, and
+`MEMORY_AUTO_REINDEX_INTERVAL_MS` defaults to `300000`. The worker drains batches while
+progress is made, backs off on errors or zero progress, uses an unreferenced timer, and is
+awaited during graceful shutdown before SQLite closes.
+
 `runReindexBatch()` from `src/lib/memory/reindex.ts`, which processes up to
 `limit` pending entries per request. Progress can be polled via
 `GET /api/memory/engine-status` (`vectorStore.needsReindex`).
