@@ -1,12 +1,13 @@
 ---
 title: "Obsidian Context Source"
-version: 3.8.40
-lastUpdated: 2026-06-28
+version: 3.8.51
+lastUpdated: 2026-09-14
 ---
 
 # Obsidian Context Source
 
 > **Source of truth:** `src/lib/obsidian/api.ts` (REST + sync client),
+> `src/lib/obsidian/syncServer.ts` (embedded local sync server),
 > `src/lib/db/obsidian.ts` (token / base-URL / WebDAV persistence),
 > `src/lib/obsidianSync.ts` (WebDAV vault sync), `open-sse/mcp-server/tools/obsidianTools.ts`
 > (22 MCP tools), `src/app/api/settings/obsidian/route.ts` +
@@ -19,8 +20,9 @@ OmniRoute connects to an **Obsidian** vault as a **context source** — a local 
 knowledge base that agents read and write through the built-in MCP server. The
 integration talks to the **Obsidian Local REST API** community plugin running inside the
 desktop app, so agents can search notes, read/write/patch files, list the vault, work
-with daily/weekly periodic notes, manage tags, run Obsidian commands, and (optionally)
-coordinate a bidirectional desktop↔mobile vault sync.
+with daily/weekly periodic notes, manage tags, and run Obsidian commands. An independent,
+opt-in embedded server can inventory a local vault and resolve `.conflict-*` files. That
+server does not implement an external file transport or claim to sync another device.
 
 The client (`src/lib/obsidian/api.ts`) wraps the Local REST API with:
 
@@ -55,6 +57,26 @@ Endpoint dashboard (`ObsidianSourceCard`), or via the settings REST API.
 | `webdav_username` | Generated WebDAV username (vault sync)           | no        |
 | `webdav_password` | Generated WebDAV password (vault sync)           | yes       |
 | `webdav_enabled`  | Whether WebDAV vault sync is enabled             | no        |
+
+### Embedded local sync server (opt-in)
+
+The embedded `node:http` server is disabled by default. It starts during Node.js
+instrumentation only when `OBSIDIAN_SYNC_ENABLED=true`. The dedicated sync token is
+mandatory when enabled and is never replaced with the Obsidian Local REST API token.
+
+| Environment variable       | Default                      | Purpose                                                         |
+| -------------------------- | ---------------------------- | --------------------------------------------------------------- |
+| `OBSIDIAN_SYNC_ENABLED`    | `false`                      | Opt in to the embedded server.                                  |
+| `OBSIDIAN_SYNC_HOST`       | `127.0.0.1`                  | Listen address. Keep loopback unless the network is protected.  |
+| `OBSIDIAN_SYNC_PORT`       | `27781`                      | Listen port.                                                    |
+| `OBSIDIAN_SYNC_VAULT_PATH` | stored `obsidian/vault_path` | Vault root; the environment value wins over SQLite settings.    |
+| `OBSIDIAN_SYNC_TOKEN`      | none                         | Required dedicated bearer token for server and built-in client. |
+| `OBSIDIAN_SYNC_SERVER_URL` | `http://127.0.0.1:27781`     | Base URL used by the sync client and MCP sync tools.            |
+
+`POST /vault/sync/trigger` performs an honest local inventory. `pushed` is the number
+of ordinary local files found, `conflicts` is the number of `.conflict-*` files, and
+`pulled`/`deleted` are zero because this server does not transfer files to or from an
+external system. Symlinks are not followed during inventory.
 
 ### Configure via REST
 
@@ -102,10 +124,10 @@ key id, `getObsidianConfigForApiKey()` prefers that key's own token/base-URL/vau
 
 ## MCP tools (22)
 
-Defined in `open-sse/mcp-server/tools/obsidianTools.ts`. The token/base-URL are resolved
-per call (per-API-key first, then global). Tools that hit the OmniRoute **sync server**
-(the four `obsidian_sync_*` tools) additionally require the sync auth token configured
-in OmniRoute settings.
+Defined in `open-sse/mcp-server/tools/obsidianTools.ts`. The Local REST API token/base-URL
+are resolved per call (per-API-key first, then global). Tools that hit the OmniRoute
+**sync server** (the four `obsidian_sync_*` tools) require the dedicated
+`OBSIDIAN_SYNC_TOKEN`. They never fall back to the Local REST API token.
 
 ### Read tools (`read:obsidian`)
 
@@ -127,23 +149,24 @@ in OmniRoute settings.
 
 ### Write tools (`write:obsidian`)
 
-| Tool                             | Description                                                                         |
-| -------------------------------- | ----------------------------------------------------------------------------------- |
-| `obsidian_write_note`            | Create or overwrite a note with given Markdown content.                             |
-| `obsidian_append_note`           | Append content to a note; optionally to a specific heading/block.                   |
-| `obsidian_patch_note`            | Surgically append/prepend/replace at a heading, block, or frontmatter field.        |
-| `obsidian_delete_note`           | Permanently delete a note from the vault.                                           |
-| `obsidian_move_note`             | Move or rename a note within the vault.                                             |
-| `obsidian_execute_command`       | Execute an Obsidian command by its command ID.                                      |
-| `obsidian_open_file`             | Open a file in Obsidian (creates it if it does not exist).                          |
-| `obsidian_sync_trigger`          | Trigger an immediate bidirectional desktop↔mobile vault sync.                       |
-| `obsidian_sync_resolve_conflict` | Resolve a sync conflict: keep `local` (mobile), `remote` (desktop), or `keep-both`. |
+| Tool                             | Description                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `obsidian_write_note`            | Create or overwrite a note with given Markdown content.                              |
+| `obsidian_append_note`           | Append content to a note; optionally to a specific heading/block.                    |
+| `obsidian_patch_note`            | Surgically append/prepend/replace at a heading, block, or frontmatter field.         |
+| `obsidian_delete_note`           | Permanently delete a note from the vault.                                            |
+| `obsidian_move_note`             | Move or rename a note within the vault.                                              |
+| `obsidian_execute_command`       | Execute an Obsidian command by its command ID.                                       |
+| `obsidian_open_file`             | Open a file in Obsidian (creates it if it does not exist).                           |
+| `obsidian_sync_trigger`          | Inventory the configured local vault and report honest local counts.                 |
+| `obsidian_sync_resolve_conflict` | Resolve a conflict: use `.conflict-*` (`local`), canonical (`remote`), or keep both. |
 
 > [!NOTE]
 > `obsidian_patch_note` targets accept `targetType` of `heading | block | frontmatter`
 > and `operation` of `append | prepend | replace`, with an optional
 > `createTargetIfMissing`. The four `obsidian_sync_*` tools talk to the local sync
-> server (`http://127.0.0.1:27781` by default) and require the sync token.
+> server (`OBSIDIAN_SYNC_SERVER_URL`, default `http://127.0.0.1:27781`) and require
+> `OBSIDIAN_SYNC_TOKEN`.
 
 ### Scopes
 
@@ -168,6 +191,21 @@ allowed scopes sourced from `OMNIROUTE_MCP_SCOPES` or the API key's scope contex
 > Local REST API (the configured `base_url`) and through the MCP tools above — there is
 > no public `/v1` Obsidian proxy endpoint.
 
+The opt-in embedded server exposes a separate, token-protected loopback API:
+
+| Method | Path                    | Purpose                                                        |
+| ------ | ----------------------- | -------------------------------------------------------------- |
+| `GET`  | `/vault/sync/status`    | Runtime status, vault name, uptime, and last inventory result. |
+| `POST` | `/vault/sync/trigger`   | Scan local files and conflict markers; no external transfer.   |
+| `GET`  | `/vault/sync/conflicts` | List `.conflict-*` files without following symlinks.           |
+| `POST` | `/vault/sync/resolve`   | Resolve one conflict with `local`, `remote`, or `keep-both`.   |
+
+For conflict resolution, `local` copies the conflict file over the canonical path,
+`remote` keeps the canonical file and removes the conflict file, and `keep-both`
+preserves the canonical file while moving the conflict content to a unique
+`.local-<label>` sibling. Request bodies are limited to 64 KiB. Traversal outside the
+vault and symlink escapes are rejected.
+
 ## Use cases
 
 - **Vault-grounded answers** — `obsidian_search_simple` / `obsidian_search_structured`
@@ -179,9 +217,9 @@ allowed scopes sourced from `OMNIROUTE_MCP_SCOPES` or the API key's scope contex
   `obsidian_get_tags` to explore structure before reading/writing.
 - **Obsidian automation** — `obsidian_list_commands` + `obsidian_execute_command` to
   drive plugins/commands from an agent; `obsidian_open_file` to surface a note in the UI.
-- **Mobile sync** — enable WebDAV sync, then `obsidian_sync_trigger` /
-  `obsidian_sync_status` / `obsidian_sync_conflicts` / `obsidian_sync_resolve_conflict`
-  to coordinate desktop↔mobile and resolve conflicts.
+- **Local vault reconciliation** — use `obsidian_sync_trigger` / `obsidian_sync_status`
+  to inventory local state and `obsidian_sync_conflicts` /
+  `obsidian_sync_resolve_conflict` to review and resolve local conflict artifacts.
 
 ## Related
 

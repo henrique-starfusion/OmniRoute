@@ -426,6 +426,15 @@ export async function registerNodejs(): Promise<void> {
 
   initGracefulShutdown();
   initApiBridgeServer();
+  try {
+    const { startObsidianSyncServer } = await import("@/lib/obsidian/syncServer");
+    if (await startObsidianSyncServer()) {
+      console.log("[STARTUP] Obsidian sync server started");
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Obsidian sync server failed to start (non-fatal):", msg);
+  }
   startSpendBatchWriter();
   registerDefaultGuardrails();
   registerBuiltinSkills(skillExecutor);
@@ -715,6 +724,14 @@ export async function registerNodejs(): Promise<void> {
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] context-window reconcile failed to start (non-fatal):", msg);
+        }),
+
+      // Memory vector reindex catch-up: opt-in, immediate, and process-wide.
+      import("@/lib/jobs/memoryReindexJob")
+        .then((m) => m.startMemoryReindexJob())
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn("[STARTUP] memory reindex job failed to start (non-fatal):", msg);
         }),
 
       // TV6 typed memory decay: optional periodic sweep of decayed episodic memories.

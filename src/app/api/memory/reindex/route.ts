@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { validateBody, isValidationFailure } from "@/shared/validation/helpers";
 import { MemoryReindexSchema } from "@/shared/schemas/memory";
-import { runReindexBatch, getReindexPending } from "@/lib/memory/reindex";
+import { getReindexPending } from "@/lib/memory/reindex";
+import { triggerMemoryReindexJob } from "@/lib/jobs/memoryReindexJob";
 import { markAllMemoriesNeedReindex } from "@/lib/db/memoryVec";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 import { logger } from "@omniroute/open-sse/utils/logger.ts";
@@ -37,12 +38,10 @@ export async function POST(request: Request) {
 
     const pending = getReindexPending();
 
-    // Dispatch batch in background — do NOT await (returns immediate response).
-    setImmediate(() => {
-      runReindexBatch(100).catch((err: unknown) => {
-        log.error("memory.reindex.background.fail", {
-          error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
-        });
+    // Use the process-wide worker so manual and automatic triggers share one mutex.
+    void triggerMemoryReindexJob().catch((err: unknown) => {
+      log.error("memory.reindex.background.fail", {
+        error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
       });
     });
 

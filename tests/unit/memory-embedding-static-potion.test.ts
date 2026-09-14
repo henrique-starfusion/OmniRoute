@@ -1,9 +1,13 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   tokenizeWordPiece,
   meanPool,
   _injectModel,
+  loadVocab,
   type PotionModel,
 } from "../../src/lib/memory/embedding/staticPotion";
 import type { EmbeddingError } from "../../src/lib/memory/embedding/types";
@@ -17,14 +21,39 @@ import { invalidate as invalidateCache } from "../../src/lib/memory/embedding/ca
 // Row 2 (world):  [0.0, 1.0, 0.0, 0.0]
 
 function makeMockModel(): PotionModel {
-  const vocab: Record<string, number> = { "[UNK]": 0, "hello": 1, "world": 2 };
+  const vocab: Record<string, number> = { "[UNK]": 0, hello: 1, world: 2 };
   const matrix = new Float32Array([
-    0.0, 0.0, 0.0, 0.0,  // row 0 = [UNK]
-    1.0, 0.0, 0.0, 0.0,  // row 1 = hello
-    0.0, 1.0, 0.0, 0.0,  // row 2 = world
+    0.0,
+    0.0,
+    0.0,
+    0.0, // row 0 = [UNK]
+    1.0,
+    0.0,
+    0.0,
+    0.0, // row 1 = hello
+    0.0,
+    1.0,
+    0.0,
+    0.0, // row 2 = world
   ]);
   return { vocab, matrix, dim: 4, vocabSize: 3, unkIdx: 0 };
 }
+
+describe("memory-embedding-static-potion vocab.txt", () => {
+  it("maps WordPiece vocab.txt lines to stable token IDs", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "potion-vocab-"));
+    const tokenizerPath = path.join(dir, "tokenizer.json");
+    fs.writeFileSync(tokenizerPath, "{}", "utf8");
+    fs.writeFileSync(path.join(dir, "vocab.txt"), "[UNK]\r\nhello\r\n##world\r\n", "utf8");
+    try {
+      const vocab = await loadVocab(dir, tokenizerPath);
+      assert.deepStrictEqual(vocab, { "[UNK]": 0, hello: 1, "##world": 2 });
+      assert.equal(vocab[""], undefined, "terminal newline must not create an empty token");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("memory-embedding-static-potion tokenizer", () => {
   const mock = makeMockModel();
@@ -121,18 +150,13 @@ describe("memory-embedding-static-potion embedStatic with mock", () => {
   });
 
   it("model load failure returns EmbeddingError with reason model_load_failed", async () => {
-    // Plan 21 fix: previously this test was tautological (`assert.ok(true)`).
-    // Force a real load-failure path: point the cache dir at /dev/null/<subdir>
-    // so fs.mkdir() fails with ENOTDIR (/dev/null is a file, not a dir).
-    // embedStatic catches the error and must return EmbeddingError with
-    // reason="model_load_failed" (staticPotion.ts:225-232).
     _injectModel(null);
     const prevCacheDir = process.env.MEMORY_STATIC_CACHE_DIR;
-    process.env.MEMORY_STATIC_CACHE_DIR = `/dev/null/potion-load-fail-${process.pid}-${Date.now()}`;
+    const invalidParent = path.join(os.tmpdir(), `potion-load-fail-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(invalidParent, "not-a-directory");
+    process.env.MEMORY_STATIC_CACHE_DIR = invalidParent;
     try {
-      const { embedStatic } = await import(
-        "../../src/lib/memory/embedding/staticPotion"
-      );
+      const { embedStatic } = await import("../../src/lib/memory/embedding/staticPotion");
       const result = await embedStatic("hello world");
       assert.ok(
         !("vector" in result),
@@ -151,6 +175,7 @@ describe("memory-embedding-static-potion embedStatic with mock", () => {
       } else {
         process.env.MEMORY_STATIC_CACHE_DIR = prevCacheDir;
       }
+      fs.rmSync(invalidParent, { force: true });
       _injectModel(makeMockModel()); // restore for other tests
     }
   });
