@@ -9,6 +9,9 @@ export const KIMI_CODING_MODELS: RegistryModel[] = [
     name: "Kimi K3",
     contextLength: 1048576,
     supportsReasoning: true,
+    // Upstream rejects any temperature other than 1 ("invalid temperature: only 1 is
+    // allowed for this model"); strip it so clients that send one still succeed.
+    unsupportedParams: ["temperature"],
     // NOTE: supportsVision intentionally left unset here — this static/stable
     // fallback catalog must stay text-only per #4071. The Kimi K3 vision
     // capability is applied on the discovered path via MODEL_SPECS["kimi-k3"]

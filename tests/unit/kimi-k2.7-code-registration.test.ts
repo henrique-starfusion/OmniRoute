@@ -44,7 +44,15 @@ test("Kimi Code k3 fallback leaves discovered capabilities unset", () => {
   assert.equal(k3.supportsVision, undefined);
   assert.equal(k3.toolCalling, undefined);
   assert.equal(k3.interleavedField, undefined);
-  assert.equal(k3.unsupportedParams, undefined);
+});
+
+test("Kimi Code k3 strips client temperature (upstream only accepts 1)", () => {
+  // Live 400 on odin: "invalid temperature: only 1 is allowed for this model".
+  for (const provider of ["kimi-coding", "kimi-coding-apikey"]) {
+    const unsupported = getUnsupportedParams(provider, "k3");
+    assert.ok(unsupported.includes("temperature"), `${provider}: temperature must be stripped`);
+    assert.ok(!unsupported.includes("top_p"), `${provider}: top_p is still accepted`);
+  }
 });
 
 test("Kimi Code stable ids do not inherit Moonshot API model capabilities", () => {

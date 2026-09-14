@@ -24,6 +24,22 @@ test.afterEach(() => {
   __setGrokTlsFetchOverride(null);
 });
 
+test("zcode validation is unsupported (local stdio app-server) and never fetches", async () => {
+  // Live: every connection sweep 503'd with "Invalid outbound URL protocol for zcode:<path>"
+  // because the generic probe fetched baseUrl "zcode://app-server/stdio".
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response("unexpected", { status: 500 });
+  };
+
+  const result = await validateProviderApiKey({ provider: "zcode", apiKey: "zcode-local" });
+
+  assert.equal(result.valid, false);
+  assert.equal(result.unsupported, true);
+  assert.equal(calls, 0);
+});
+
 function toPlainHeaders(headers: HeadersInit | undefined) {
   if (headers instanceof Headers) return Object.fromEntries(headers.entries());
   return Object.fromEntries(

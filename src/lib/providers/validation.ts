@@ -298,6 +298,10 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     poe: validatePoeProvider,
     clarifai: validateClarifaiProvider,
     reka: validateRekaProvider,
+    // zcode drives a local app-server over stdio (baseUrl "zcode://app-server/stdio"):
+    // there is no HTTP endpoint to probe, and the generic probe trips the outbound URL
+    // guard ("Invalid outbound URL protocol"), marking a working connection degraded.
+    zcode: () => ({ valid: false, unsupported: true }),
     maritalk: validateMaritalkProvider,
     nlpcloud: validateNlpCloudProvider,
     oneminai: validateOneMinAiProvider,

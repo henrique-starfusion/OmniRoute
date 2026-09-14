@@ -638,6 +638,33 @@ test("provider models route flags intentional local-catalog-only providers so mo
   assert.equal(voyageBody.intentional, true, "voyage-ai local catalog must be flagged intentional");
 });
 
+test("provider models route serves zcode's registry catalog without an HTTP fetch", async () => {
+  // zcode's baseUrl is "zcode://app-server/stdio"; a remote /models fetch tripped the
+  // outbound URL guard and model-sync reported a degraded 502 on every sweep.
+  const connection = await seedConnection("zcode", { apiKey: "zcode-local" });
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls++;
+    return new Response("unexpected", { status: 500 });
+  };
+
+  const body = (await (await callRoute(connection.id)).json()) as {
+    source?: string;
+    intentional?: boolean;
+    warning?: string;
+    models: unknown[];
+  };
+
+  assert.equal(body.source, "local_catalog");
+  assert.equal(
+    body.intentional,
+    true,
+    `zcode local catalog must be flagged intentional (warning: ${body.warning})`
+  );
+  assert.ok(body.models.length > 0, "zcode registry models must be returned");
+  assert.equal(fetchCalls, 0, "zcode discovery must not attempt an HTTP fetch");
+});
+
 test("provider models route does NOT flag a degraded remote-fetch fallback as intentional (#5460/#5465)", async () => {
   // aimlapi normally discovers remotely; when the live fetch fails it falls back
   // to the local catalog — that IS degraded and must NOT be flagged intentional,

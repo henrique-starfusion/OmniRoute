@@ -108,5 +108,9 @@ export async function buildNoAuthModelsResponse(
     connectionId,
     models: visible,
     source: "local_catalog",
+    // No modelsUrl → no remote discovery exists (e.g. zcode's local stdio app-server).
+    // The registry catalog is the intended source, so model-sync must import it
+    // instead of reporting a degraded 502 on every sweep (#5460/#5465).
+    intentional: true,
   });
 }
