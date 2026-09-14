@@ -16,6 +16,17 @@ test("controlCenter.ts does not import server-only model.ts", () => {
   assert.doesNotMatch(src, /from\s+["'][^"']*(providerAlias|providerModels|providerRegistry)/);
 });
 
+// The provider registry reaches client bundles via src/shared/constants/cliTools.ts
+// (CliAgentsPageClient). oauth.ts imports cursorAgentCliVersion.ts (node:fs/os/path),
+// so no registry entry may import it — regression from #13264.
+test("codebuddy-cn registry entry does not import oauth constants", () => {
+  const src = readFileSync(
+    join(process.cwd(), "open-sse/config/providers/registry/codebuddy-cn/index.ts"),
+    "utf8"
+  );
+  assert.doesNotMatch(src, /from\s+["'][^"']*lib\/oauth/);
+});
+
 test("providerAlias.ts has no runtime/DB imports", () => {
   const src = readFileSync(join(process.cwd(), "open-sse/services/providerAlias.ts"), "utf8");
   const imports = [...src.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]);
