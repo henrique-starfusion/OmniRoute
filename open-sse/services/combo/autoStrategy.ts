@@ -514,6 +514,8 @@ export async function expandAutoComboCandidatePool(
         ? Array.from(userVisibleIds)
         : getProviderModels(providerId).map((m) => m.id);
       for (const modelId of expandIds) {
+        // Catalog fallback (no synced/custom models) must honor the eye-icon hidden flag too.
+        if (hiddenModels?.has(modelId)) continue;
         const modelStr = `${providerId}/${modelId}`;
         if (!seenModelStrs.has(modelStr)) {
           seenModelStrs.add(modelStr);

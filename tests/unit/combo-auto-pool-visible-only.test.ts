@@ -126,6 +126,32 @@ test("virtual auto-combo pool falls back to the static catalog when the provider
     "the configured default must remain among catalog-fallback candidates"
   );
 });
+test("expandAutoComboCandidatePool drops user-hidden models on the static-catalog fallback", async () => {
+  // Repro: a provider with no synced/custom models (e.g. Claude Code "cc", BUILT-IN
+  // models only) falls back to the static catalog. Models hidden with the eye icon
+  // (modelCompatOverrides.isHidden, modality "chat") must not enter auto/* pools.
+  await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "OpenAI",
+    apiKey: "sk-test-openai",
+  });
+  const catalogIds = (await combo.expandAutoComboCandidatePool([], { config: {} }))
+    .filter((t) => t.provider === "openai")
+    .map((t) => t.modelStr.slice("openai/".length));
+  assert.ok(catalogIds.length > 1, "expected several catalog-fallback models for openai");
+  const hiddenId = catalogIds[0];
+  modelsDb.setModelIsHidden("openai", hiddenId, true, "chat");
+
+  const expanded = await combo.expandAutoComboCandidatePool([], { config: {} });
+  const openaiIds = expanded.filter((t) => t.provider === "openai").map((t) => t.modelStr);
+  assert.ok(openaiIds.length > 0, "visible catalog models must remain");
+  assert.ok(
+    !openaiIds.includes(`openai/${hiddenId}`),
+    `hidden catalog model openai/${hiddenId} must NOT be expanded into the auto pool`
+  );
+});
+
 test("virtual auto-combo pool filters EVERY provider with partial sync, not just openrouter", async () => {
   // openai: sync only gpt-4o-mini (gpt-4o and gpt-4o-turbo exist in the static
   // catalog but are NOT synced → must be absent). kilocode: 359 synced models,
